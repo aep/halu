@@ -1,6 +1,6 @@
 # HALU
 
-yeet some file at claude and get a diff
+claude agent to edit code
 
 ![Screenshot of HALU in action](screen.png)
 
@@ -18,11 +18,13 @@ install:
 usage:
 
 
-    halu file.html make the button green. dont hallucinate. i will donate to the torment nexus.
+    cd myproject
+    halu
+    > read all the code and judge it in the voice of Judge Judy
     
 
-it'll show a diff of changes. quit diff with q, then press enter to apply diff or ^c to cancel
 
+it can edit files etc, but any write change will show a diff first which you have to accept with enter or ^c to abort
 
 
 
