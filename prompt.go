@@ -30,7 +30,7 @@ func NewPrompt(historyFile string) (*Prompt, error) {
 		HistoryFile:       historyFile,
 		HistorySearchFold: true,
 		InterruptPrompt:   "^C",
-		EOFPrompt:         "exit",
+		EOFPrompt:         "ok",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create readline instance: %v", err)
@@ -42,13 +42,12 @@ func NewPrompt(historyFile string) (*Prompt, error) {
 	}, nil
 }
 
-// GetMultiLineInput reads input from the user, treating backslash at the end
-// of a line as a continuation marker
+// GetMultiLineInput reads input from the user, treating either a single "."
+// or Ctrl+D as the end of input marker
 func (p *Prompt) GetMultiLineInput() (string, error) {
 	var lines []string
-	//fmt.Println(color.YellowString("Enter prompt (backslash \\ for continuation):"))
-
 	firstLine := true
+
 	for {
 		// Use continuation prompt for subsequent lines
 		if !firstLine {
@@ -70,21 +69,24 @@ func (p *Prompt) GetMultiLineInput() (string, error) {
 
 		firstLine = false
 
-		// Check if line ends with backslash
-		line = strings.TrimRight(line, " \t") // Remove trailing whitespace
-		if strings.HasSuffix(line, "\\") {
-			// Remove the backslash and continue reading
-			line = strings.TrimSuffix(line, "\\")
-			lines = append(lines, line)
-			continue
+		// Trim trailing whitespace but preserve leading whitespace
+		line = strings.TrimRight(line, " \t")
+
+		// Single dot on a line marks the end of input
+		if line == "." {
+			break
 		}
 
 		lines = append(lines, line)
-		break // No backslash at the end, we're done
 	}
 
 	// Reset prompt to original state
 	p.rl.SetPrompt(color.GreenString("➤ "))
+
+	// If we only got empty lines, return empty string
+	if len(lines) == 0 {
+		return "", nil
+	}
 
 	return strings.Join(lines, "\n"), nil
 }
