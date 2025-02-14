@@ -47,9 +47,21 @@ func registerWriteFileTool(a *Agent) {
 			}
 			tempFile.Close()
 
+			// Create empty file for diff if original doesn't exist
+			originalPath := path
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				emptyFile, err := os.CreateTemp("", "ai-edit-empty-*")
+				if err != nil {
+					return "", fmt.Errorf("error creating empty temp file: %v", err)
+				}
+				emptyFile.Close()
+				originalPath = emptyFile.Name()
+				defer os.Remove(originalPath)
+			}
+
 			// Show diff and get confirmation
 			fmt.Println("\nShowing diff between original and proposed changes...")
-			cmd := exec.Command("git", "diff", "--no-index", path, tempFilePath)
+			cmd := exec.Command("git", "diff", "--no-index", originalPath, tempFilePath)
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
