@@ -14,7 +14,7 @@ type Tool struct {
 	Execute     func(input map[string]interface{}) (string, error)
 }
 
-// isPathSafe checks if a path is within the current working directory
+// isPathSafe checks if a path is within the current working directory and not a dotfile
 func isPathSafe(path string) bool {
 	// Get absolute path
 	absPath, err := filepath.Abs(path)
@@ -31,6 +31,14 @@ func isPathSafe(path string) bool {
 	// Clean and normalize paths
 	absPath = filepath.Clean(absPath)
 	cwd = filepath.Clean(cwd)
+
+	// Check if any component of the path starts with a dot
+	pathParts := strings.Split(filepath.ToSlash(absPath), "/")
+	for _, part := range pathParts {
+		if strings.HasPrefix(part, ".") {
+			return false
+		}
+	}
 
 	// Check if path is within cwd
 	return strings.HasPrefix(absPath, cwd)

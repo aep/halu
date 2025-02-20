@@ -4,12 +4,20 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+type FileInfo struct {
+	Path      string `json:"path"`
+	IsDir     bool   `json:"is_dir"`
+	Size      int64  `json:"size"`
+	ModTime   string `json:"mod_time"`
+}
 
 func registerListFilesTool(a *Agent) {
 	a.tools["list_files"] = Tool{
 		Name:        "list_files",
-		Description: "Recursively list all files in the current directory",
+		Description: "List files and directories in the current directory",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -26,20 +34,38 @@ func registerListFilesTool(a *Agent) {
 				return "", os.ErrPermission
 			}
 
-			var files []string
-			err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return err
-				}
-				if !info.IsDir() && isPathSafe(path) {
-					files = append(files, path)
-				}
-				return nil
-			})
+			entries, err := os.ReadDir(path)
 			if err != nil {
 				return "", err
 			}
-			result, err := json.Marshal(files)
+
+			var filesInfo []FileInfo
+			for _, entry := range entries {
+				name := entry.Name()
+				// Skip dotfiles
+				if strings.HasPrefix(name, ".") {
+					continue
+				}
+
+				if !isPathSafe(filepath.Join(path, name)) {
+					continue
+				}
+				
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
+
+				fileInfo := FileInfo{
+					Path:      filepath.Join(path, name),
+					IsDir:     entry.IsDir(),
+					Size:      info.Size(),
+					ModTime:   info.ModTime().String(),
+				}
+				filesInfo = append(filesInfo, fileInfo)
+			}
+
+			result, err := json.Marshal(filesInfo)
 			return string(result), err
 		},
 	}

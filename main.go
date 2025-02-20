@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +20,7 @@ import (
 type Agent struct {
 	client *anthropic.Client
 	tools  map[string]Tool
+	yolo   bool
 }
 
 // Logger colors
@@ -41,7 +43,7 @@ func prettyPrint(data interface{}) string {
 }
 
 // NewAgent creates a new AI agent with the given API key
-func NewAgent() (*Agent, error) {
+func NewAgent(yolo bool) (*Agent, error) {
 	// Load environment variables
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -67,6 +69,7 @@ func NewAgent() (*Agent, error) {
 	agent := &Agent{
 		client: client,
 		tools:  make(map[string]Tool),
+		yolo:   yolo,
 	}
 
 	// Register tools
@@ -192,7 +195,11 @@ func prettyTruncate(result string) string {
 }
 
 func main() {
-	agent, err := NewAgent()
+	// Add yolo flag
+	yolo := flag.Bool("yolo", false, "Skip confirmation when writing files")
+	flag.Parse()
+
+	agent, err := NewAgent(*yolo)
 	if err != nil {
 		errorColor.Printf("Failed to create agent: %v\n", err)
 		os.Exit(1)
@@ -237,3 +244,4 @@ func main() {
 		fmt.Println()
 	}
 }
+

@@ -9,6 +9,7 @@ import (
 )
 
 func registerWriteFileTool(a *Agent) {
+
 	a.tools["write_file"] = Tool{
 		Name:        "write_file",
 		Description: "Replace a files contents",
@@ -31,6 +32,10 @@ func registerWriteFileTool(a *Agent) {
 
 			if !isPathSafe(path) {
 				return "", os.ErrPermission
+			}
+
+			if a.yolo {
+				return "", os.WriteFile(path, []byte(content), 0o644)
 			}
 
 			// Create temp file
