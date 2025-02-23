@@ -6,12 +6,18 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // writeWithConfirmation handles the common pattern of writing content to a file with diff preview
 // and user confirmation. If yolo is true, it writes directly without confirmation.
 func writeWithConfirmation(path string, content []byte, yolo bool) error {
 	if yolo {
+		// Ensure directory exists before writing
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("error creating directory: %v", err)
+		}
 		return os.WriteFile(path, content, 0o644)
 	}
 
@@ -52,6 +58,12 @@ func writeWithConfirmation(path string, content []byte, yolo bool) error {
 	fmt.Print("\nPress Enter to apply changes, Ctrl+C to cancel: ")
 	reader := bufio.NewReader(os.Stdin)
 	reader.ReadString('\n')
+
+	// Ensure directory exists before creating the destination file
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("error creating directory: %v", err)
+	}
 
 	// Apply changes by copying file contents
 	source, err := os.Open(tempFilePath)

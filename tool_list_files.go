@@ -170,8 +170,8 @@ func registerListFilesTool(a *Agent) {
 					return err
 				}
 
-				// Skip dotfiles
-				if strings.HasPrefix(filepath.Base(currentPath), ".") {
+				// Skip dotfiles, but allow "." as the root path
+				if strings.HasPrefix(filepath.Base(currentPath), ".") && currentPath != path {
 					if info.IsDir() {
 						return filepath.SkipDir
 					}

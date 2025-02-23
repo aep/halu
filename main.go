@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -19,8 +21,25 @@ import (
 // Agent represents our AI agent with its tools and client
 type Agent struct {
 	client *anthropic.Client
+	vllm   *VLLMClient
 	tools  map[string]Tool
 	yolo   bool
+	local  bool
+}
+
+// VLLMClient handles interactions with local LLM endpoint
+type VLLMClient struct {
+	BaseURL    string
+	HTTPClient *http.Client
+}
+
+func NewVLLMClient(baseURL string) *VLLMClient {
+	return &VLLMClient{
+		BaseURL: baseURL,
+		HTTPClient: &http.Client{
+			Timeout: time.Second * 300,
+		},
+	}
 }
 
 // Logger colors
@@ -43,7 +62,7 @@ func prettyPrint(data interface{}) string {
 }
 
 // NewAgent creates a new AI agent with the given API key
-func NewAgent(yolo bool) (*Agent, error) {
+func NewAgent(yolo bool, local bool) (*Agent, error) {
 	// Load environment variables
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -55,21 +74,37 @@ func NewAgent(yolo bool) (*Agent, error) {
 		}
 	}
 
-	// Get API key from environment
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
-	}
+	var client *anthropic.Client
+	var vllm *VLLMClient
 
-	// Create Anthropic client
-	client := anthropic.NewClient(
-		option.WithAPIKey(apiKey),
-	)
+	if local {
+		// Get local endpoint from environment
+		endpoint := os.Getenv("HALU_LOCAL_LLM_ENDPOINT")
+		if endpoint == "" {
+			return nil, fmt.Errorf("HALU_LOCAL_LLM_ENDPOINT environment variable not set")
+		}
+		
+		// Create VLLM client
+		vllm = NewVLLMClient(endpoint)
+	} else {
+		// Get API key from environment
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
+		}
+
+		// Create Anthropic client
+		client = anthropic.NewClient(
+			option.WithAPIKey(apiKey),
+		)
+	}
 
 	agent := &Agent{
 		client: client,
+		vllm:   vllm,
 		tools:  make(map[string]Tool),
 		yolo:   yolo,
+		local:  local,
 	}
 
 	// Register tools
@@ -80,6 +115,17 @@ func NewAgent(yolo bool) (*Agent, error) {
 
 // Analyze starts the code analysis with the given prompt
 func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.MessageParam) (string, []anthropic.MessageParam, error) {
+	if a.local {
+		// Convert Anthropic messages to VLLM format
+		vllmMessages := convertToVLLMMessages(messages)
+		response, newVLLMMessages, err := a.runLocal(ctx, prompt, vllmMessages)
+		if err != nil {
+			return "", messages, err
+		}
+		// Convert VLLM messages back to Anthropic format
+		newMessages := convertToAnthropicMessages(newVLLMMessages)
+		return response, newMessages, nil
+	}
 	// Convert tools to the format expected by the Anthropic API
 	var toolParams []anthropic.ToolParam
 	for _, tool := range a.tools {
@@ -197,11 +243,12 @@ func prettyTruncate(result string) string {
 }
 
 func main() {
-	// Add yolo flag
+	// Add flags
 	yolo := flag.Bool("yolo", false, "Skip confirmation when writing files")
+	local := flag.Bool("local", false, "Use local LLM endpoint instead of Anthropic API")
 	flag.Parse()
 
-	agent, err := NewAgent(*yolo)
+	agent, err := NewAgent(*yolo, *local)
 	if err != nil {
 		errorColor.Printf("Failed to create agent: %v\n", err)
 		os.Exit(1)
