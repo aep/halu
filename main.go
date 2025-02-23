@@ -154,9 +154,11 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 			toolColor.Printf("\n➤ tool: %s(%s)\n", block.Name, inputStr)
 
 			result, err := tool.Execute(input)
+			errorStr := ""
 			if err != nil {
+				errorStr = fmt.Sprintf("Error: %v", err)
 				errorColor.Printf("➤ Tool execution failed: %v\n", err)
-				return "", messages, fmt.Errorf("tool execution failed: %v", err)
+				result = fmt.Sprintf("tool execution failed: %s", errorStr)
 			}
 
 			// Add the tool result to the conversation
