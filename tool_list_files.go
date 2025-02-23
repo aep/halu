@@ -170,12 +170,15 @@ func registerListFilesTool(a *Agent) {
 					return err
 				}
 
-				// Skip dotfiles, but allow "." as the root path
+				// Skip dotfiles under the provided path, but allow the provided path itself to start with dot
 				if strings.HasPrefix(filepath.Base(currentPath), ".") && currentPath != path {
-					if info.IsDir() {
-						return filepath.SkipDir
+					relPath, err := filepath.Rel(path, currentPath)
+					if err == nil && !strings.HasPrefix(relPath, "..") {
+						if info.IsDir() {
+							return filepath.SkipDir
+						}
+						return nil
 					}
-					return nil
 				}
 
 				// Check if path should be ignored

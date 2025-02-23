@@ -32,8 +32,19 @@ func isPathSafe(path string) bool {
 	absPath = filepath.Clean(absPath)
 	cwd = filepath.Clean(cwd)
 
-	// Check if any component of the path starts with a dot
-	pathParts := strings.Split(filepath.ToSlash(absPath), "/")
+	// Only check components under cwd for dots
+	relPath, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		return false
+	}
+	
+	// Allow if path is exactly cwd
+	if relPath == "." {
+		return true
+	}
+	
+	// Check if any component under cwd starts with a dot
+	pathParts := strings.Split(filepath.ToSlash(relPath), "/")
 	for _, part := range pathParts {
 		if strings.HasPrefix(part, ".") {
 			return false
