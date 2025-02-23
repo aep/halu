@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -146,47 +143,9 @@ func registerSearchReplaceTool(a *Agent) {
 				return "No matches found after trying various strategies", nil
 			}
 
-			// Create temp file with changes
-			tempFile, err := os.CreateTemp("", "ai-edit-*")
+			err = writeWithConfirmation(path, []byte(newContent), a.yolo)
 			if err != nil {
-				return "", fmt.Errorf("error creating temp file: %v", err)
-			}
-			tempFilePath := tempFile.Name()
-			defer os.Remove(tempFilePath)
-
-			// Write new content to temp file
-			if _, err := tempFile.Write([]byte(newContent)); err != nil {
-				return "", fmt.Errorf("error writing to temp file: %v", err)
-			}
-			tempFile.Close()
-
-			// Show diff and get confirmation
-			fmt.Println("\nShowing diff between original and proposed changes...")
-			cmd := exec.Command("git", "diff", "--no-index", path, tempFilePath)
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Run()
-
-			fmt.Print("\nPress Enter to apply changes, Ctrl+C to cancel: ")
-			reader := bufio.NewReader(os.Stdin)
-			reader.ReadString('\n')
-
-			// Apply changes by copying file contents
-			source, err := os.Open(tempFilePath)
-			if err != nil {
-				return "", fmt.Errorf("error opening temp file: %v", err)
-			}
-			defer source.Close()
-
-			dest, err := os.Create(path)
-			if err != nil {
-				return "", fmt.Errorf("error creating destination file: %v", err)
-			}
-			defer dest.Close()
-
-			if _, err = io.Copy(dest, source); err != nil {
-				return "", fmt.Errorf("error copying file: %v", err)
+				return "", err
 			}
 
 			return "Changes applied successfully", nil

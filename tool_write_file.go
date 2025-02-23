@@ -1,15 +1,10 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"io"
 	"os"
-	"os/exec"
 )
 
 func registerWriteFileTool(a *Agent) {
-
 	a.tools["write_file"] = Tool{
 		Name:        "write_file",
 		Description: "Replace a files contents",
@@ -34,63 +29,9 @@ func registerWriteFileTool(a *Agent) {
 				return "", os.ErrPermission
 			}
 
-			if a.yolo {
-				return "", os.WriteFile(path, []byte(content), 0o644)
-			}
-
-			// Create temp file
-			tempFile, err := os.CreateTemp("", "ai-edit-*")
+			err := writeWithConfirmation(path, []byte(content), a.yolo)
 			if err != nil {
-				return "", fmt.Errorf("error creating temp file: %v", err)
-			}
-			tempFilePath := tempFile.Name()
-			defer os.Remove(tempFilePath)
-
-			// Write new content to temp file
-			if _, err := tempFile.Write([]byte(content)); err != nil {
-				return "", fmt.Errorf("error writing to temp file: %v", err)
-			}
-			tempFile.Close()
-
-			// Create empty file for diff if original doesn't exist
-			originalPath := path
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				emptyFile, err := os.CreateTemp("", "ai-edit-empty-*")
-				if err != nil {
-					return "", fmt.Errorf("error creating empty temp file: %v", err)
-				}
-				emptyFile.Close()
-				originalPath = emptyFile.Name()
-				defer os.Remove(originalPath)
-			}
-
-			// Show diff and get confirmation
-			fmt.Println("\nShowing diff between original and proposed changes...")
-			cmd := exec.Command("git", "diff", "--no-index", originalPath, tempFilePath)
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Run()
-
-			fmt.Print("\nPress Enter to apply changes, Ctrl+C to cancel: ")
-			reader := bufio.NewReader(os.Stdin)
-			reader.ReadString('\n')
-
-			// Apply changes by copying file contents
-			source, err := os.Open(tempFilePath)
-			if err != nil {
-				return "", fmt.Errorf("error opening temp file: %v", err)
-			}
-			defer source.Close()
-
-			dest, err := os.Create(path)
-			if err != nil {
-				return "", fmt.Errorf("error creating destination file: %v", err)
-			}
-			defer dest.Close()
-
-			if _, err = io.Copy(dest, source); err != nil {
-				return "", fmt.Errorf("error copying file: %v", err)
+				return "", err
 			}
 
 			return "Changes applied successfully", nil
