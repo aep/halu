@@ -83,7 +83,7 @@ func NewAgent(yolo bool, local bool) (*Agent, error) {
 		if endpoint == "" {
 			return nil, fmt.Errorf("HALU_LOCAL_LLM_ENDPOINT environment variable not set")
 		}
-		
+
 		// Create VLLM client
 		vllm = NewVLLMClient(endpoint)
 	} else {
@@ -143,7 +143,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 
 	// Create the streaming message
 	stream := a.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.F(anthropic.ModelClaude3_5SonnetLatest),
+		Model:     anthropic.F("claude-3-7-sonnet-latest"),
 		MaxTokens: anthropic.F(int64(4096)),
 		Messages:  anthropic.F(messages),
 		Tools:     anthropic.F(toolParams),
@@ -293,4 +293,3 @@ func main() {
 		fmt.Println()
 	}
 }
-
