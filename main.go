@@ -23,6 +23,12 @@ type Agent struct {
 	yolo   bool
 }
 
+// TokenUsage tracks token usage statistics
+type TokenUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+}
+
 // Logger colors
 var (
 	stepColor    = color.New(color.FgCyan)
@@ -31,6 +37,7 @@ var (
 	resultColor  = color.New(color.FgMagenta)
 	errorColor   = color.New(color.FgRed)
 	messageColor = color.New(color.FgBlue)
+	tokenColor   = color.New(color.FgHiBlue)
 )
 
 // prettyPrint formats and prints JSON-like data
@@ -78,8 +85,11 @@ func NewAgent(yolo bool, local bool) (*Agent, error) {
 	return agent, nil
 }
 
-// Analyze starts the code analysis with the given prompt
-func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.MessageParam) (string, []anthropic.MessageParam, error) {
+// Run starts the interaction with the given prompt
+func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.MessageParam) (string, []anthropic.MessageParam, TokenUsage, error) {
+	// Initialize token usage
+	tokenUsage := TokenUsage{}
+
 	// Convert tools to the format expected by the Anthropic API
 	var toolParams []anthropic.ToolParam
 	for _, tool := range a.tools {
@@ -103,6 +113,18 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 		Tools:     anthropic.F(toolParams),
 	}
 
+	// Get input token count first
+	tokensCountResult, err := a.client.Messages.CountTokens(ctx, anthropic.MessageCountTokensParams{
+		Model:    streamParams.Model,
+		Messages: streamParams.Messages,
+		Tools:    streamParams.Tools,
+	})
+	if err != nil {
+		log.Printf("Warning: Failed to count input tokens: %v", err)
+	} else {
+		tokenUsage.InputTokens = tokensCountResult.InputTokens
+	}
+
 	// Retry logic for streaming errors
 	maxRetries := 10
 	var message anthropic.Message
@@ -117,6 +139,13 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 			event := stream.Current()
 			message.Accumulate(event)
 
+			// Track token usage from message delta events
+			if event.Type == anthropic.MessageStreamEventTypeMessageDelta {
+				if messageEvent, ok := event.AsUnion().(anthropic.MessageDeltaEvent); ok {
+					tokenUsage.OutputTokens = messageEvent.Usage.OutputTokens
+				}
+			}
+
 			// Handle content blocks deltas for streaming output
 			if event.Type == anthropic.MessageStreamEventTypeContentBlockDelta {
 				delta := event.Delta.(anthropic.ContentBlockDeltaEventDelta)
@@ -129,18 +158,13 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 		// Check for errors
 		if stream.Err() != nil {
 			errMsg := stream.Err().Error()
-
-			// Check if it's the specific internal server error we want to retry
-			if strings.Contains(errMsg, "streaming error: received error while streaming") &&
-				strings.Contains(errMsg, "Internal server error") {
-				if attempt < maxRetries {
-					fmt.Printf("\n[Retrying due to streaming error... Attempt %d/%d]\n", attempt+1, maxRetries)
-					continue // Retry
-				}
+			if attempt < maxRetries {
+				fmt.Printf("\n[Retrying due to streaming error %s... Attempt %d/%d]\n", errMsg, attempt+1, maxRetries)
+				continue // Retry
 			}
 
 			// If we've reached max retries or it's a different error, return the error
-			return "", messages, fmt.Errorf("streaming error: %v", stream.Err())
+			return "", messages, tokenUsage, fmt.Errorf("streaming error: %v", stream.Err())
 		}
 
 		// If we got here, streaming completed successfully
@@ -148,6 +172,14 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 	}
 
 	fmt.Println() // Add newline after streaming
+
+	// Get final token usage from the complete message
+	if message.Usage.InputTokens > 0 {
+		tokenUsage.InputTokens = message.Usage.InputTokens
+	}
+	if message.Usage.OutputTokens > 0 {
+		tokenUsage.OutputTokens = message.Usage.OutputTokens
+	}
 
 	// Add assistant's message to history
 	messages = append(messages, message.ToParam())
@@ -161,13 +193,13 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 			// Execute the tool
 			tool, ok := a.tools[block.Name]
 			if !ok {
-				return "", messages, fmt.Errorf("unknown tool: %s", block.Name)
+				return "", messages, tokenUsage, fmt.Errorf("unknown tool: %s", block.Name)
 			}
 
 			var input map[string]interface{}
 			inputBytes, _ := json.Marshal(block.Input)
 			if err := json.Unmarshal(inputBytes, &input); err != nil {
-				return "", messages, fmt.Errorf("failed to parse tool input: %v", err)
+				return "", messages, tokenUsage, fmt.Errorf("failed to parse tool input: %v", err)
 			}
 
 			// Print tool call with input parameters
@@ -202,8 +234,17 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 				anthropic.NewToolResultBlock(block.ID, result, false),
 			))
 
+			// Print token usage for the current step
+			tokenColor.Printf("\n⚙ used %d input, %d output tokens\n", tokenUsage.InputTokens, tokenUsage.OutputTokens)
+
 			// Get the next message with the tool result
-			return a.Run(ctx, "", messages)
+			finalResponse, newMessages, newTokenUsage, err := a.Run(ctx, "", messages)
+
+			// Accumulate the token usage from recursive calls
+			tokenUsage.InputTokens += newTokenUsage.InputTokens
+			tokenUsage.OutputTokens += newTokenUsage.OutputTokens
+
+			return finalResponse, newMessages, tokenUsage, err
 		}
 	}
 
@@ -217,10 +258,10 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 		}
 
 		stepColor.Println("\n➤ done")
-		return finalResponse, messages, nil
+		return finalResponse, messages, tokenUsage, nil
 	}
 
-	return "", messages, nil
+	return "", messages, tokenUsage, nil
 }
 
 // prettyTruncate truncates long results for display
@@ -253,6 +294,7 @@ func main() {
 
 	ctx := context.Background()
 	var messages []anthropic.MessageParam
+	var totalInputTokens, totalOutputTokens int64
 
 	// Main conversation loop
 	for {
@@ -271,7 +313,8 @@ func main() {
 			errorColor.Printf("Failed to save history: %v\n", err)
 		}
 
-		_, newMessages, err := agent.Run(ctx, input, messages)
+		// Run with the input
+		_, newMessages, tokenUsage, err := agent.Run(ctx, input, messages)
 		if err != nil {
 			errorColor.Printf("%s\n", err)
 			continue
@@ -279,6 +322,25 @@ func main() {
 
 		// Update conversation history
 		messages = newMessages
+
+		// Update and display total token usage
+		totalInputTokens += tokenUsage.InputTokens
+		totalOutputTokens += tokenUsage.OutputTokens
+		
+		// Calculate costs (Claude pricing: $3/M for input, $15/M for output)
+		inputCost := float64(tokenUsage.InputTokens) * 0.000003
+		outputCost := float64(tokenUsage.OutputTokens) * 0.000015
+		totalCost := inputCost + outputCost
+		
+		totalInputCost := float64(totalInputTokens) * 0.000003
+		totalOutputCost := float64(totalOutputTokens) * 0.000015
+		totalSessionCost := totalInputCost + totalOutputCost
+		
+		tokenColor.Printf("\n⚙ Token usage summary:\n")
+		tokenColor.Printf("   - This interaction: %d input ($%.4f), %d output ($%.4f) tokens, total cost: $%.4f\n", 
+			tokenUsage.InputTokens, inputCost, tokenUsage.OutputTokens, outputCost, totalCost)
+		tokenColor.Printf("   - Total session: %d input ($%.4f), %d output ($%.4f) tokens, total cost: $%.4f\n", 
+			totalInputTokens, totalInputCost, totalOutputTokens, totalOutputCost, totalSessionCost)
 
 		fmt.Println()
 	}
