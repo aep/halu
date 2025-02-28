@@ -6,11 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -21,25 +19,8 @@ import (
 // Agent represents our AI agent with its tools and client
 type Agent struct {
 	client *anthropic.Client
-	vllm   *VLLMClient
 	tools  map[string]Tool
 	yolo   bool
-	local  bool
-}
-
-// VLLMClient handles interactions with local LLM endpoint
-type VLLMClient struct {
-	BaseURL    string
-	HTTPClient *http.Client
-}
-
-func NewVLLMClient(baseURL string) *VLLMClient {
-	return &VLLMClient{
-		BaseURL: baseURL,
-		HTTPClient: &http.Client{
-			Timeout: time.Second * 300,
-		},
-	}
 }
 
 // Logger colors
@@ -74,37 +55,21 @@ func NewAgent(yolo bool, local bool) (*Agent, error) {
 		}
 	}
 
-	var client *anthropic.Client
-	var vllm *VLLMClient
-
-	if local {
-		// Get local endpoint from environment
-		endpoint := os.Getenv("HALU_LOCAL_LLM_ENDPOINT")
-		if endpoint == "" {
-			return nil, fmt.Errorf("HALU_LOCAL_LLM_ENDPOINT environment variable not set")
-		}
-
-		// Create VLLM client
-		vllm = NewVLLMClient(endpoint)
-	} else {
-		// Get API key from environment
-		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
-		}
-
-		// Create Anthropic client
-		client = anthropic.NewClient(
-			option.WithAPIKey(apiKey),
-		)
+	// Get API key from environment
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
 	}
+
+	// Create Anthropic client
+	client := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+	)
 
 	agent := &Agent{
 		client: client,
-		vllm:   vllm,
 		tools:  make(map[string]Tool),
 		yolo:   yolo,
-		local:  local,
 	}
 
 	// Register tools
@@ -115,17 +80,6 @@ func NewAgent(yolo bool, local bool) (*Agent, error) {
 
 // Analyze starts the code analysis with the given prompt
 func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.MessageParam) (string, []anthropic.MessageParam, error) {
-	if a.local {
-		// Convert Anthropic messages to VLLM format
-		vllmMessages := convertToVLLMMessages(messages)
-		response, newVLLMMessages, err := a.runLocal(ctx, prompt, vllmMessages)
-		if err != nil {
-			return "", messages, err
-		}
-		// Convert VLLM messages back to Anthropic format
-		newMessages := convertToAnthropicMessages(newVLLMMessages)
-		return response, newMessages, nil
-	}
 	// Convert tools to the format expected by the Anthropic API
 	var toolParams []anthropic.ToolParam
 	for _, tool := range a.tools {
@@ -141,33 +95,56 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 		messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)))
 	}
 
-	// Create the streaming message
-	stream := a.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+	// Prepare parameters for streaming message
+	streamParams := anthropic.MessageNewParams{
 		Model:     anthropic.F("claude-3-7-sonnet-latest"),
 		MaxTokens: anthropic.F(int64(4096)),
 		Messages:  anthropic.F(messages),
 		Tools:     anthropic.F(toolParams),
-	})
-
-	message := anthropic.Message{}
-	needsToolExecution := false
-
-	// Process the stream
-	for stream.Next() {
-		event := stream.Current()
-		message.Accumulate(event)
-
-		// Handle content blocks deltas for streaming output
-		if event.Type == anthropic.MessageStreamEventTypeContentBlockDelta {
-			delta := event.Delta.(anthropic.ContentBlockDeltaEventDelta)
-			if delta.Type == anthropic.ContentBlockDeltaEventDeltaTypeTextDelta {
-				fmt.Print(delta.Text)
-			}
-		}
 	}
 
-	if stream.Err() != nil {
-		return "", messages, fmt.Errorf("streaming error: %v", stream.Err())
+	// Retry logic for streaming errors
+	maxRetries := 10
+	var message anthropic.Message
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Create the streaming message
+		stream := a.client.Messages.NewStreaming(ctx, streamParams)
+		message = anthropic.Message{}
+
+		// Process the stream
+		for stream.Next() {
+			event := stream.Current()
+			message.Accumulate(event)
+
+			// Handle content blocks deltas for streaming output
+			if event.Type == anthropic.MessageStreamEventTypeContentBlockDelta {
+				delta := event.Delta.(anthropic.ContentBlockDeltaEventDelta)
+				if delta.Type == anthropic.ContentBlockDeltaEventDeltaTypeTextDelta {
+					fmt.Print(delta.Text)
+				}
+			}
+		}
+
+		// Check for errors
+		if stream.Err() != nil {
+			errMsg := stream.Err().Error()
+
+			// Check if it's the specific internal server error we want to retry
+			if strings.Contains(errMsg, "streaming error: received error while streaming") &&
+				strings.Contains(errMsg, "Internal server error") {
+				if attempt < maxRetries {
+					fmt.Printf("\n[Retrying due to streaming error... Attempt %d/%d]\n", attempt+1, maxRetries)
+					continue // Retry
+				}
+			}
+
+			// If we've reached max retries or it's a different error, return the error
+			return "", messages, fmt.Errorf("streaming error: %v", stream.Err())
+		}
+
+		// If we got here, streaming completed successfully
+		break
 	}
 
 	fmt.Println() // Add newline after streaming
@@ -176,6 +153,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 	messages = append(messages, message.ToParam())
 
 	// Process any tool calls
+	needsToolExecution := false
 	for _, block := range message.Content {
 		if block.Type == "tool_use" {
 			needsToolExecution = true
@@ -194,10 +172,22 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 
 			// Print tool call with input parameters
 			inputStr := prettyPrint(input)
-			if len(inputStr) > 100 {
-				inputStr = inputStr[:97] + "..."
+
+			// For write_file, ensure the path is always shown in the debug output
+			if block.Name == "write_file" && input["path"] != nil {
+				path := input["path"].(string)
+				if len(inputStr) > 100 {
+					toolColor.Printf("\n➤ tool: %s(path: %s, content: [truncated])\n", block.Name, path)
+				} else {
+					toolColor.Printf("\n➤ tool: %s(%s)\n", block.Name, inputStr)
+				}
+			} else {
+				// Default behavior for other tools
+				if len(inputStr) > 100 {
+					inputStr = inputStr[:97] + "..."
+				}
+				toolColor.Printf("\n➤ tool: %s(%s)\n", block.Name, inputStr)
 			}
-			toolColor.Printf("\n➤ tool: %s(%s)\n", block.Name, inputStr)
 
 			result, err := tool.Execute(input)
 			errorStr := ""
@@ -283,7 +273,7 @@ func main() {
 
 		_, newMessages, err := agent.Run(ctx, input, messages)
 		if err != nil {
-			errorColor.Printf("Analysis failed: %v\n", err)
+			errorColor.Printf("%s\n", err)
 			continue
 		}
 

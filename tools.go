@@ -7,4 +7,6 @@ func (a *Agent) registerTools() {
 	registerReadFileTool(a)
 	registerWriteFileTool(a)
 	registerRipgrepTool(a)
+	registerGoDocTool(a)
+	registerGoVetTool(a)
 }
