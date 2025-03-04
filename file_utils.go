@@ -12,14 +12,6 @@ import (
 // writeWithConfirmation handles the common pattern of writing content to a file with diff preview
 // and user confirmation. If yolo is true, it writes directly without confirmation.
 func writeWithConfirmation(path string, content []byte, yolo bool) error {
-	if yolo {
-		// Ensure directory exists before writing
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("error creating directory: %v", err)
-		}
-		return os.WriteFile(path, content, 0o644)
-	}
 
 	// Create temp file with new content
 	tempFile, err := os.CreateTemp("", "ai-edit-*")
@@ -49,15 +41,17 @@ func writeWithConfirmation(path string, content []byte, yolo bool) error {
 
 	// Show diff and get confirmation
 	fmt.Println("\nShowing diff between original and proposed changes...")
-	cmd := exec.Command("git", "diff", "--no-index", originalPath, tempFilePath)
+	cmd := exec.Command("git", "--no-pager", "diff", "--no-index", originalPath, tempFilePath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Run()
 
-	fmt.Print("\nPress Enter to apply changes, Ctrl+C to cancel: ")
-	reader := bufio.NewReader(os.Stdin)
-	reader.ReadString('\n')
+	if !yolo {
+		fmt.Print("\nPress Enter to apply changes, Ctrl+C to cancel: ")
+		reader := bufio.NewReader(os.Stdin)
+		reader.ReadString('\n')
+	}
 
 	// Ensure directory exists before creating the destination file
 	dir := filepath.Dir(path)

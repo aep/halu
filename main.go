@@ -91,7 +91,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 	tokenUsage := TokenUsage{}
 
 	// Convert tools to the format expected by the Anthropic API
-	var toolParams []anthropic.ToolParam
+	var toolParams []anthropic.ToolUnionUnionParam
 	for _, tool := range a.tools {
 		toolParams = append(toolParams, anthropic.ToolParam{
 			Name:        anthropic.F(tool.Name),
@@ -113,11 +113,19 @@ func (a *Agent) Run(ctx context.Context, prompt string, messages []anthropic.Mes
 		Tools:     anthropic.F(toolParams),
 	}
 
+	// Convert tools to MessageCountTokensToolUnionParam type for token counting
+	var tokenCountToolParams []anthropic.MessageCountTokensToolUnionParam
+	for _, tool := range toolParams {
+		if tp, ok := tool.(anthropic.ToolParam); ok {
+			tokenCountToolParams = append(tokenCountToolParams, tp)
+		}
+	}
+
 	// Get input token count first
 	tokensCountResult, err := a.client.Messages.CountTokens(ctx, anthropic.MessageCountTokensParams{
 		Model:    streamParams.Model,
 		Messages: streamParams.Messages,
-		Tools:    streamParams.Tools,
+		Tools:    anthropic.F(tokenCountToolParams),
 	})
 	if err != nil {
 		log.Printf("Warning: Failed to count input tokens: %v", err)

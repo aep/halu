@@ -13,7 +13,7 @@ func registerGoDocTool(a *Agent) {
 			"properties": map[string]interface{}{
 				"query": map[string]interface{}{
 					"type":        "string",
-					"description": "The Go package, function, method, or type to get documentation for (e.g., 'io/ioutil', 'json.Marshal', 'os.File')",
+					"description": "The Go package, function, method, or type to get documentation. To get an overview of all functions request the package like 'io/ioutil', and to get details, specify the qualified type like 'encoding/json.Marshal')",
 				},
 			},
 			"required": []string{"query"},
@@ -22,7 +22,7 @@ func registerGoDocTool(a *Agent) {
 			query := input["query"].(string)
 
 			// Execute the go doc command
-			cmd := exec.Command("go", "doc", "-all", query)
+			cmd := exec.Command("go", "doc", query)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				// If go doc returns an error, include both the error and any output
